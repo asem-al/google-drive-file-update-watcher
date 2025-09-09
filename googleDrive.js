@@ -113,107 +113,116 @@ async function initDrive() {
 
 
 async function getFiles(fileIds, fields = 'id,name,mimeType,modifiedTime,viewedByMeTime') {
-    if (!drive) throw new Error("Drive not initialized. Call initDrive() first.");
 
+    if (!drive) throw new Error("Drive not initialized. Call initDrive() first.");
     if (fileIds.length === 0) return {};
 
-    const auth = drive.context._options.auth;
-    // const { token } = await auth.getAccessToken();
-    const token = await ensureValidToken();
-    if (!token) throw new Error('No access token');
-
-    const boundary = 'batch_' + Math.random().toString(36).slice(2);
-    const bodyParts = [];
-    const encodedFields = encodeURIComponent(fields);
-
-    fileIds.forEach((fileId, index) => {
-        bodyParts.push(
-            `--${boundary}\r\n` +
-            `Content-Type: application/http\r\n` +
-            `Content-ID: ${index + 1}\r\n\r\n` +
-            `GET /drive/v3/files/${fileId}?fields=${encodedFields}\r\n\r\n`
-        );
-    });
-    bodyParts.push(`--${boundary}--\r\n`);
-    const body = bodyParts.join('');
+    const MAX_BATCH_SIZE = 100;
 
     const https = require('https');
     const Buffer = require("buffer").Buffer;
+    const encodedFields = encodeURIComponent(fields);
+    const allResults = {};
+    const token = await ensureValidToken();
+    if (!token) throw new Error('No access token');
 
-    return new Promise((resolve, reject) => {
-        const req = https.request({
-            method: 'POST',
-            hostname: 'www.googleapis.com',
-            path: '/batch/drive/v3',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': `multipart/mixed; boundary=${boundary}`,
-                'Content-Length': Buffer.byteLength(body),
-            },
-        }, (res) => {
-            let data = '';
-            res.on('data', (chunk) => { data += chunk; });
-            res.on('end', () => {
-                if (res.statusCode !== 200) {
-                    reject(new Error(`Batch request failed with status ${res.statusCode}: ${data}`));
-                    return;
-                }
-
-                const result = {};
-
-                const match = res.headers['content-type'].match(/boundary=(.*)/);
-                if (!match) {
-                    reject(new Error('No boundary in response'));
-                    return;
-                }
-                const respBoundary = match[1];
-
-                const parts = data.split(`--${respBoundary}`);
-                for (let i = 1; i < parts.length - 1; i++) {
-                    let part = parts[i].trim();
-
-                    const idMatch = part.match(/Content-ID:\s*response-(\d+)/);
-                    if (!idMatch) continue;
-
-                    const reqIndex = parseInt(idMatch[1]) - 1;
-                    const fileId = fileIds[reqIndex];
-
-                    const httpStart = part.indexOf('HTTP/1.1');
-                    if (httpStart === -1) continue;
-                    part = part.slice(httpStart);
-
-                    const statusMatch = part.match(/^HTTP\/1.1 (\d+) /);
-                    if (!statusMatch) continue;
-                    const status = parseInt(statusMatch[1]);
-
-                    if (status !== 200) {
-                        const bodyStart = part.indexOf('\r\n\r\n') + 4;
-                        const errBody = part.slice(bodyStart);
-                        console.error(`Error for file ${fileId}: ${status} ${errBody}`);
-                        continue;
-                    }
-
-                    const headerEnd = part.indexOf('\r\n\r\n');
-                    if (headerEnd === -1) continue;
-                    const bodyStr = part.slice(headerEnd + 4);
-
-                    let resData;
-                    try {
-                        resData = JSON.parse(bodyStr);
-                    } catch (e) {
-                        console.error(`Parse error for file ${fileId}:`, e);
-                        continue;
-                    }
-
-                    result[fileId] = { ...resData }
-                }
-                resolve(result);
-            });
+    // Helper to send a single batch
+    async function sendBatch(batchFileIds) {
+        const boundary = 'batch_' + Math.random().toString(36).slice(2);
+        const bodyParts = [];
+        batchFileIds.forEach((fileId, index) => {
+            bodyParts.push(
+                `--${boundary}\r\n` +
+                `Content-Type: application/http\r\n` +
+                `Content-ID: ${index + 1}\r\n\r\n` +
+                `GET /drive/v3/files/${fileId}?fields=${encodedFields}\r\n\r\n`
+            );
         });
-        req.on('error', reject);
-        req.write(body);
-        req.end();
-    });
+        bodyParts.push(`--${boundary}--\r\n`);
+        const body = bodyParts.join('');
+
+        return new Promise((resolve, reject) => {
+            const req = https.request({
+                method: 'POST',
+                hostname: 'www.googleapis.com',
+                path: '/batch/drive/v3',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': `multipart/mixed; boundary=${boundary}`,
+                    'Content-Length': Buffer.byteLength(body),
+                },
+            }, (res) => {
+                let data = '';
+                res.on('data', (chunk) => { data += chunk; });
+                res.on('end', () => {
+                    if (res.statusCode !== 200) {
+                        reject(new Error(`Batch request failed with status ${res.statusCode}: ${data}`));
+                        return;
+                    }
+
+                    const result = {};
+                    const match = res.headers['content-type'].match(/boundary=(.*)/);
+                    if (!match) {
+                        reject(new Error('No boundary in response'));
+                        return;
+                    }
+                    const respBoundary = match[1];
+                    const parts = data.split(`--${respBoundary}`);
+                    for (let i = 1; i < parts.length - 1; i++) {
+                        let part = parts[i].trim();
+                        const idMatch = part.match(/Content-ID:\s*response-(\d+)/);
+                        if (!idMatch) continue;
+                        const reqIndex = parseInt(idMatch[1]) - 1;
+                        const fileId = batchFileIds[reqIndex];
+                        const httpStart = part.indexOf('HTTP/1.1');
+                        if (httpStart === -1) continue;
+                        part = part.slice(httpStart);
+                        const statusMatch = part.match(/^HTTP\/1.1 (\d+) /);
+                        if (!statusMatch) continue;
+                        const status = parseInt(statusMatch[1]);
+                        if (status !== 200) {
+                            const bodyStart = part.indexOf('\r\n\r\n') + 4;
+                            const errBody = part.slice(bodyStart);
+                            console.error(`Error for file ${fileId}: ${status} ${errBody}`);
+                            continue;
+                        }
+                        const headerEnd = part.indexOf('\r\n\r\n');
+                        if (headerEnd === -1) continue;
+                        const bodyStr = part.slice(headerEnd + 4);
+                        let resData;
+                        try {
+                            resData = JSON.parse(bodyStr);
+                        } catch (e) {
+                            console.error(`Parse error for file ${fileId}:`, e);
+                            continue;
+                        }
+                        result[fileId] = { ...resData };
+                    }
+                    resolve(result);
+                });
+            });
+            req.on('error', reject);
+            req.write(body);
+            req.end();
+        });
+    }
+
+    // Split fileIds into batches and aggregate results
+    const batches = [];
+    for (let i = 0; i < fileIds.length; i += MAX_BATCH_SIZE) {
+        batches.push(fileIds.slice(i, i + MAX_BATCH_SIZE));
+    }
+
+    for (const batch of batches) {
+        try {
+            const batchResult = await sendBatch(batch);
+            Object.assign(allResults, batchResult);
+        } catch (err) {
+            console.error("Batch error:", err);
+        }
+    }
+
+    return allResults;
 }
 
 async function ensureValidToken() {
