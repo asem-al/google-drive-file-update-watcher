@@ -22,9 +22,13 @@ let {
 } = require('./lastModifiedStore');
 
 const {
-    notifyFileChanges,
-    remindOfUnviewedChanges,
+    sendTelegramMessage,
 } = require('./telegramBot');
+
+const {
+    fileModifiedMessage,
+    unreadUpdatesMessage,
+} = require('./messageTemplates');
 
 const readFileIds = require('./readFileIds');
 
@@ -46,8 +50,10 @@ const readFileIds = require('./readFileIds');
 
     if (config.REMINDER_INTERVAL_MINUTES > 0) {
         setInterval(async () => {
-            await remindOfUnviewedChanges(
-                getUnviewedChanges(lastModified)
+            await sendTelegramMessage(
+                unreadUpdatesMessage(
+                    getUnviewedChanges(lastModified)
+                )
             );
         }, config.REMINDER_INTERVAL_MINUTES * 60000);
     }
@@ -63,16 +69,17 @@ async function checkModifiedFiles(fileIds, lastModified) {
     try {
         const modifiedFiles = await getModifiedFiles(fileIds, lastModified);
 
-        if (modifiedFiles.length > 0) {
+        if (modifiedFiles.length === 0) return;
 
-            for (const file of modifiedFiles) {
-                lastModified[file.id] = file;
-            }
-
-            await saveLastModified();
-
-            await notifyFileChanges(modifiedFiles);
+        for (const file of modifiedFiles) {
+            lastModified[file.id] = file;
+            await sendTelegramMessage(
+                fileModifiedMessage(file)
+            );
         }
+
+        await saveLastModified();
+
     } catch (err) {
         console.error("❌ Error during checkModifiedFiles:", err);
     }
