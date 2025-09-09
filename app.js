@@ -21,9 +21,7 @@ let {
     saveLastModified,
 } = require('./lastModifiedStore');
 
-const {
-    sendTelegramMessage,
-} = require('./telegramBot');
+const { notify } = require('./notifier');
 
 const {
     fileModifiedMessage,
@@ -50,7 +48,7 @@ const readFileIds = require('./readFileIds');
 
     if (config.REMINDER_INTERVAL_MINUTES > 0) {
         setInterval(async () => {
-            await sendTelegramMessage(
+            await notify(
                 unreadUpdatesMessage(
                     getUnviewedChanges(lastModified)
                 )
@@ -73,7 +71,7 @@ async function checkModifiedFiles(fileIds, lastModified) {
 
         for (const file of modifiedFiles) {
             lastModified[file.id] = file;
-            await sendTelegramMessage(
+            await notify(
                 fileModifiedMessage(file)
             );
         }
