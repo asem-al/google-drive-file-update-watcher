@@ -1,15 +1,15 @@
+const config = require('./config');
+
 require('dotenv').config();
 
-const requiredEnv = ['BOT_TOKEN', 'CHAT_ID'];
-
-const missingEnv = requiredEnv.filter(key => !process.env[key]);
-
-if (missingEnv.length > 0) {
-    console.error(`❌ Missing required environment variables: ${missingEnv.join(', ')}`);
-    process.exit(1);
+if (config.NOTIFY_TELEGRAM) {
+    const requiredEnv = ['BOT_TOKEN', 'CHAT_ID'];
+    const missingEnv = requiredEnv.filter(key => !process.env[key]);
+    if (missingEnv.length > 0) {
+        console.error(`❌ Missing required environment variables: ${missingEnv.join(', ')}`);
+        process.exit(1);
+    }
 }
-
-const config = require('./config');
 
 const {
     initDrive,
